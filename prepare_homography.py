@@ -102,24 +102,43 @@ print(f"✅ Masterul ales: {os.path.basename(best_match_path)}")
 master_img = cv2.imread(best_match_path)
 input_img = cv2.imread(INPUT_PATH)
 
-# downscale master pentru ORB doar pt keypoints
-scale = 1000 / max(master_img.shape[:2])
-master_scaled = cv2.resize(master_img, None, fx=scale, fy=scale)
+# redimensionăm imaginile pentru detectarea keypoint-urilor
+target = 1000
+master_scale = target / max(master_img.shape[:2])
+input_scale = target / max(input_img.shape[:2])
 
-orb = cv2.ORB_create(1000)
-kp1, des1 = orb.detectAndCompute(master_scaled, None)
-kp2, des2 = orb.detectAndCompute(input_img, None)
+master_scaled = cv2.resize(master_img, None, fx=master_scale, fy=master_scale)
+input_scaled = cv2.resize(input_img, None, fx=input_scale, fy=input_scale)
 
-bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
-matches = bf.match(des1, des2)
-matches = sorted(matches, key=lambda x: x.distance)
+# folosim SIFT pentru o potrivire mai robustă
+sift = cv2.SIFT_create()
+kp1, des1 = sift.detectAndCompute(master_scaled, None)
+kp2, des2 = sift.detectAndCompute(input_scaled, None)
 
-if len(matches) >= 4:
-    src_pts = np.float32([kp1[m.queryIdx].pt for m in matches[:50]]).reshape(-1, 1, 2)
-    dst_pts = np.float32([kp2[m.trainIdx].pt for m in matches[:50]]).reshape(-1, 1, 2)
+bf = cv2.BFMatcher(cv2.NORM_L2)
+matches = bf.knnMatch(des1, des2, k=2)
 
-    # compensăm pentru scalare
-    src_pts *= 1 / scale
+# Lowe's ratio test pentru a păstra numai potrivirile bune
+good_matches = []
+for m, n in matches:
+    if m.distance < 0.75 * n.distance:
+        good_matches.append(m)
+
+# salvăm imagine cu potrivirile pentru debugging
+if good_matches:
+    debug_img = cv2.drawMatches(
+        master_scaled, kp1, input_scaled, kp2, good_matches[:50], None,
+        flags=cv2.DrawMatchesFlags_NOT_DRAW_SINGLE_POINTS
+    )
+    cv2.imwrite("keypoints_match.png", debug_img)
+
+if len(good_matches) >= 4:
+    src_pts = np.float32([kp1[m.queryIdx].pt for m in good_matches]).reshape(-1, 1, 2)
+    dst_pts = np.float32([kp2[m.trainIdx].pt for m in good_matches]).reshape(-1, 1, 2)
+
+    # convertim coordonatele la scara originală
+    src_pts *= 1 / master_scale
+    dst_pts *= 1 / input_scale
 
     M, mask = cv2.findHomography(dst_pts, src_pts, cv2.RANSAC, 5.0)
 
